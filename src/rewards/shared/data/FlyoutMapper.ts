@@ -159,10 +159,20 @@ export function mapFlyoutToDashboard(data: RewardsFlyoutData, account: RewardsSt
     }
 
     const accountInfo = mergeAccountInfo(account.account, flyout.userStatus)
+    const accountCounters = account.dashboard.userStatus.counters
+    const flyoutCounters = flyout.userStatus?.counters
+    const mergedCounters = {
+        ...flyoutCounters,
+        ...(accountCounters.pcSearch !== undefined ? { pcSearch: accountCounters.pcSearch } : {}),
+        ...(accountCounters.mobileSearch !== undefined ? { mobileSearch: accountCounters.mobileSearch } : {}),
+        ...(accountCounters.activityAndQuiz !== undefined ? { activityAndQuiz: accountCounters.activityAndQuiz } : {}),
+        ...(accountCounters.dailyPoint !== undefined ? { dailyPoint: accountCounters.dailyPoint } : {})
+    }
     const dashboard = normalizeDashboard({
         ...account.dashboard,
         userStatus: {
             ...account.dashboard.userStatus,
+            counters: mergedCounters,
             level: accountInfo.level,
             levelInfo:
                 account.dashboard.userStatus.levelInfo ??

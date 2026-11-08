@@ -101,20 +101,28 @@ function normalizeCounters(value: unknown): Counters {
     const counters = record(value)
     const read = (value: unknown): BasePromotion[] | undefined => {
         if (!Array.isArray(value)) return undefined
-        if (
-            value.some(
-                item =>
-                    pointValue(record(item).pointProgress) === null ||
-                    pointValue(record(item).pointProgressMax) === null ||
-                    Number(record(item).pointProgress) > Number(record(item).pointProgressMax)
-            )
-        )
-            return undefined
+        const validItems = value.filter(item => {
+            const raw = record(item)
+            const attrs = record(raw.attributes)
+            const progress = pointValue(raw.pointProgress ?? attrs.pointprogress ?? attrs.progress)
+            const max = pointValue(raw.pointProgressMax ?? attrs.pointmax ?? attrs.max)
+            return progress !== null && max !== null
+        })
+        if (!validItems.length && value.length > 0) return undefined
 
-        return value
+        return validItems
             .map((item, i) => {
                 const counter = record(item)
-                return normalizePromotion({ ...counter, name: text(counter.name) || `counter-${i}` })
+                const attrs = record(counter.attributes)
+                const max = pointValue(counter.pointProgressMax ?? attrs.pointmax ?? attrs.max) ?? 0
+                const rawProgress = pointValue(counter.pointProgress ?? attrs.pointprogress ?? attrs.progress) ?? 0
+                const progress = max > 0 ? Math.min(rawProgress, max) : rawProgress
+                return normalizePromotion({
+                    ...counter,
+                    name: text(counter.name) || `counter-${i}`,
+                    pointProgress: progress,
+                    pointProgressMax: max
+                })
             })
             .filter((p): p is BasePromotion => p !== null)
     }
@@ -124,6 +132,19 @@ function normalizeCounters(value: unknown): Counters {
         activityAndQuiz: read(counters.activityAndQuiz ?? counters.ActivityAndQuiz),
         dailyPoint: read(counters.dailyPoint ?? counters.DailyPoint)
     }
+}
+export function mergeCounters(...sources: (Counters | undefined | null)[]): Counters {
+    const merged: Counters = {}
+    for (const source of sources) {
+        if (!source) continue
+        if (merged.pcSearch === undefined && source.pcSearch !== undefined) merged.pcSearch = source.pcSearch
+        if (merged.mobileSearch === undefined && source.mobileSearch !== undefined)
+            merged.mobileSearch = source.mobileSearch
+        if (merged.activityAndQuiz === undefined && source.activityAndQuiz !== undefined)
+            merged.activityAndQuiz = source.activityAndQuiz
+        if (merged.dailyPoint === undefined && source.dailyPoint !== undefined) merged.dailyPoint = source.dailyPoint
+    }
+    return merged
 }
 export function normalizeProfile(value: unknown): Profile {
     const profile = record(value)

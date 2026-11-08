@@ -4,8 +4,8 @@ import { accountReset } from '../AccountReset'
 import type { ParserContext } from './ParserContext'
 import { FlightDecoder } from './FlightDecoder'
 import { ActionMetadata } from './ActionMetadata'
-import { mergeAccountInfo, normalizeAccountInfo } from './NormalizeRewards'
-import type { AccountInfo } from '../../types/RewardsState'
+import { mergeAccountInfo, normalizeAccountInfo, normalizePromotion, record } from './NormalizeRewards'
+import type { AccountInfo, BasePromotion, Counters } from '../../types/RewardsState'
 import { observePunchCard } from '../PunchCardProgress'
 
 export interface ParsedOffer {
@@ -74,6 +74,30 @@ export interface StreakProtectionState {
     streakCounter: number | null
 }
 
+export interface PointsBreakdownSearchCounter {
+    progress: number
+    max: number
+    originalMax: number | null
+}
+
+export interface PointsBreakdownHistoryBucket {
+    earn: number | null
+    spend: number | null
+}
+
+export interface PointsBreakdownState {
+    totalPoints: number | null
+    dailyOffer: number | null
+    boostActivated: boolean
+    pc: PointsBreakdownSearchCounter | null
+    mobile: PointsBreakdownSearchCounter | null
+    history: {
+        thisMonth: PointsBreakdownHistoryBucket | null
+        thisYear: PointsBreakdownHistoryBucket | null
+        lifetime: PointsBreakdownHistoryBucket | null
+    } | null
+}
+
 export type { AccountInfo as AccountState } from '../../types/RewardsState'
 
 export interface PageSnapshot {
@@ -81,6 +105,8 @@ export interface PageSnapshot {
     reportable: ParsedOffer[]
     streaks: StreakState[]
     streakProtection: StreakProtectionState | null
+    pointsBreakdown?: PointsBreakdownState | null
+    counters?: Counters
     account: AccountInfo
 }
 
@@ -113,7 +139,9 @@ export default class RewardsPageParser {
         const reportable = offers.filter(offer => offer.reportable)
         const streaks = this.parseStreaks(combined)
         const streakProtection = this.parseStreakProtection(combined)
-        const account = this.parseAccountData(combined)
+        const pointsBreakdown = this.parsePointsBreakdown(combined)
+        const counters = this.countersFromPointsBreakdown(pointsBreakdown)
+        const account = this.parseAccountData(combined, pointsBreakdown)
         const accountEmail = this.bot.currentAccountEmail
         this.bot.observeStreaks?.(streaks)
 
@@ -124,6 +152,11 @@ export default class RewardsPageParser {
                 ` | streakProtectionEnabled=${streakProtection?.isProtectionOn ?? 'null'}` +
                 ` | streakProtectionRemainingDays=${streakProtection?.remainingDays ?? 'null'}` +
                 ` | streakCounter=${streakProtection?.streakCounter ?? 'null'} | level=${account.level}` +
+                (pointsBreakdown
+                    ? ` | todayPoints=${pointsBreakdown.totalPoints ?? 'null'}` +
+                      ` | desktopSearch=${pointsBreakdown.pc ? `${pointsBreakdown.pc.progress}/${pointsBreakdown.pc.max}` : 'null'}` +
+                      ` | mobileSearch=${pointsBreakdown.mobile ? `${pointsBreakdown.mobile.progress}/${pointsBreakdown.mobile.max}` : 'null'}`
+                    : '') +
                 ` | account=${accountEmail ?? 'null'}`,
             {
                 kind: 'account-info',
@@ -151,6 +184,8 @@ export default class RewardsPageParser {
             reportable,
             streaks,
             streakProtection,
+            pointsBreakdown,
+            counters,
             account
         }
     }
@@ -183,13 +218,18 @@ export default class RewardsPageParser {
     }
 
     claimablePointsFromPayload(payload: string): number | null {
-        const combined = payload.includes('self.__next_f.push') ? this.flight.concatFlightChunks(payload) : payload
-        const amounts = this.flight.extractObjects(combined, '"pointClaim"').flatMap(carrier => {
-            const claim = carrier.pointClaim as Record<string, unknown> | null
-            const points = pointValue(claim?.points)
+        const hasFlight = payload.includes('self.__next_f.push')
+        const combined = hasFlight ? this.flight.concatFlightChunks(payload) : payload
+        const carriers = this.flight.extractObjects(combined, '"pointClaim"')
+        const amounts = carriers.flatMap(carrier => {
+            const claim = carrier.pointClaim as Record<string, unknown> | null | undefined
+            if (claim === null || claim === undefined) return [0]
+            const points = pointValue(claim.points)
             return points !== null && Number.isSafeInteger(points) ? [points] : []
         })
-        return amounts.at(-1) ?? null
+        if (amounts.length) return amounts.at(-1) ?? null
+        if (hasFlight && combined.length > 0 && this.availablePointsFromPayload(payload) !== null) return 0
+        return null
     }
 
     // Section parsers
@@ -385,7 +425,135 @@ export default class RewardsPageParser {
         }
     }
 
-    private parseAccountData(combined: string): AccountInfo {
+    getPointsBreakdown(html: string | readonly string[]): PointsBreakdownState | null {
+        return this.parsePointsBreakdown(this.flight.concatFlightChunks(html))
+    }
+
+    private parsePointsBreakdown(combined: string): PointsBreakdownState | null {
+        try {
+            const containers = this.flight.extractObjects(combined, '"pointsCounters"')
+            if (!containers.length) return null
+
+            const readSearchCounter = (value: unknown): PointsBreakdownSearchCounter | null => {
+                const raw = record(value)
+                const progress = pointValue(raw.progress)
+                const max = pointValue(raw.max)
+                if (progress === null || max === null) return null
+                return {
+                    progress: max > 0 ? Math.min(progress, max) : progress,
+                    max,
+                    originalMax: pointValue(raw.originalMax)
+                }
+            }
+
+            const readHistoryBucket = (value: unknown): PointsBreakdownHistoryBucket | null => {
+                const raw = record(value)
+                const earn = pointValue(raw.earn)
+                const spend = pointValue(raw.spend)
+                if (earn === null && spend === null) return null
+                return { earn, spend }
+            }
+
+            for (const container of containers) {
+                const countersRaw = record(container.pointsCounters)
+                if (!Object.keys(countersRaw).length) continue
+
+                const pc = readSearchCounter(countersRaw.pc)
+                const mobile = readSearchCounter(countersRaw.mobile)
+                const dailyOffer = pointValue(countersRaw.dailyOffer)
+                const totalPoints = pointValue(countersRaw.totalPoints)
+                const boostActivated = countersRaw.boostActivated === true
+
+                const historyRaw = record(container.pointsHistory)
+                const thisMonth = readHistoryBucket(historyRaw.thisMonth)
+                const thisYear = readHistoryBucket(historyRaw.thisYear)
+                const lifetime = readHistoryBucket(historyRaw.lifetime)
+                const history =
+                    thisMonth || thisYear || lifetime
+                        ? {
+                              thisMonth,
+                              thisYear,
+                              lifetime
+                          }
+                        : null
+
+                if (!pc && !mobile && dailyOffer === null && totalPoints === null && !history) continue
+
+                const breakdown: PointsBreakdownState = {
+                    totalPoints,
+                    dailyOffer,
+                    boostActivated,
+                    pc,
+                    mobile,
+                    history
+                }
+
+                this.bot.logger.debug(
+                    this.bot.isMobile,
+                    'REACT-PARSE',
+                    `Parsed points breakdown | today=${totalPoints ?? 'null'} | pc=${pc ? `${pc.progress}/${pc.max}` : 'null'}` +
+                        ` | mobile=${mobile ? `${mobile.progress}/${mobile.max}` : 'null'} | offers=${dailyOffer ?? 'null'}` +
+                        ` | boost=${boostActivated} | monthEarn=${thisMonth?.earn ?? 'null'} | lifetimeEarn=${lifetime?.earn ?? 'null'}`
+                )
+
+                return breakdown
+            }
+
+            return null
+        } catch (error) {
+            this.bot.logger.error(
+                this.bot.isMobile,
+                'REACT-PARSE',
+                `Failed parsing points breakdown | error=${error instanceof Error ? error.message : String(error)}`
+            )
+            return null
+        }
+    }
+
+    countersFromPointsBreakdown(breakdown: PointsBreakdownState | null | undefined): Counters {
+        if (!breakdown) return {}
+        const toPromotion = (
+            offerId: string,
+            name: string,
+            title: string,
+            progress: number,
+            max: number
+        ): BasePromotion | null =>
+            normalizePromotion({
+                offerId,
+                name,
+                title,
+                promotionType: 'searchcounter',
+                pointProgress: progress,
+                pointProgressMax: max,
+                complete: max > 0 && progress >= max
+            })
+
+        const counters: Counters = {}
+        if (breakdown.pc) {
+            const pcPromo = toPromotion(
+                'earn_pointbreakdown_pc_search',
+                'PC_Search',
+                'Desktop Bing search',
+                breakdown.pc.progress,
+                breakdown.pc.max
+            )
+            if (pcPromo) counters.pcSearch = [pcPromo]
+        }
+        if (breakdown.mobile) {
+            const mobilePromo = toPromotion(
+                'earn_pointbreakdown_mobile_search',
+                'Mobile_Search',
+                'Mobile Bing search',
+                breakdown.mobile.progress,
+                breakdown.mobile.max
+            )
+            if (mobilePromo) counters.mobileSearch = [mobilePromo]
+        }
+        return counters
+    }
+
+    private parseAccountData(combined: string, pointsBreakdown?: PointsBreakdownState | null): AccountInfo {
         const empty = normalizeAccountInfo(null)
 
         try {
@@ -395,6 +563,12 @@ export default class RewardsPageParser {
 
             for (const info of this.flight.extractObjects(combined, '"activeLevel"'))
                 membership.push({ levelInfo: info })
+            if (pointsBreakdown?.history) {
+                membership.push({
+                    pointsProgress: pointsBreakdown.history.thisMonth?.earn ?? null,
+                    lifetimeEarn: pointsBreakdown.history.lifetime?.earn ?? null
+                })
+            }
             const account = mergeAccountInfo(...membership)
 
             for (const header of this.flight.extractObjects(combined, '"availablePoints"'))
@@ -470,8 +644,8 @@ export default class RewardsPageParser {
     }
 
     private parseQuestOffers(combined: string): QuestChild[] {
-        const out: QuestChild[] = []
         const seen = new Set<string>()
+        const out: QuestChild[] = []
 
         for (const obj of this.flight.extractObjects(combined, '"offerId"')) {
             const offerId = obj.offerId as string | undefined
@@ -482,6 +656,9 @@ export default class RewardsPageParser {
             const title = (obj.title as string) ?? ''
             const destination = (obj.destination as string) ?? (obj.destinationUrl as string) ?? ''
             const points = pointValue(obj.points ?? obj.pointProgressMax) ?? 0
+            const pointProgress = pointValue(
+                obj.pointProgress ?? (obj.attributes as Record<string, unknown> | undefined)?.pointprogress
+            )
             const isCompleted = ((obj.isCompleted ?? obj.complete) as boolean | undefined) === true
             const isLocked = obj.isLocked === true
             const isDisabled = (obj.isDisabled as boolean | undefined) === true
@@ -494,9 +671,7 @@ export default class RewardsPageParser {
                 title,
                 destination,
                 points,
-                pointProgress: pointValue(
-                    obj.pointProgress ?? (obj.attributes as Record<string, unknown> | undefined)?.pointprogress
-                ),
+                pointProgress,
                 isCompleted,
                 isLocked,
                 isDisabled,

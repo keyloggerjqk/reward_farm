@@ -8,6 +8,7 @@ import type { WebPoints } from './types/Points'
 import type { PageSnapshot, ParsedOffer } from './shared/parsers/RewardsPageParser'
 import { URLs } from '../constants/urls'
 import { observeActivityBalance } from './shared/ActivityBalance'
+import { mergeAccountInfo } from './shared/parsers/NormalizeRewards'
 
 export default class RewardsService {
     private readonly reads = new Map<boolean, Promise<RewardsState>>()
@@ -71,7 +72,17 @@ export default class RewardsService {
             this.mode.snapshotRoutes.map(route => this.mode.data.getPageHtml(URLs.rewards.path(route), route))
         )
         const available = pages.filter((html): html is string => html !== null)
-        return available.length ? this.bot.pageParser.snapshotPage(available) : null
+        if (!available.length) return null
+        const previousAccount = this.bot.reactSnapshot?.account
+        const snapshot = this.bot.pageParser.snapshotPage(available)
+        snapshot.account = mergeAccountInfo(
+            previousAccount,
+            {
+                availablePoints: this.bot.accountState.initialBalance !== null ? this.bot.userData.currentPoints : null
+            },
+            snapshot.account
+        )
+        return snapshot
     }
 
     async logStreaks(): Promise<void> {

@@ -192,10 +192,21 @@ export class ClaimBonusPoints extends BaseActivity {
             await this.bot.sessionState.applyResponseCookies(url, response.headers['set-cookie'])
         if (response.status < 200 || response.status >= 300)
             throw new Error(`Claim state request failed | status=${response?.status ?? 'unknown'}`)
+        let claimable = this.bot.pageParser.claimablePointsFromPayload(response.data)
+        const balance = this.bot.pageParser.availablePointsFromPayload(response.data)
+        if (claimable === null && balance !== null) {
+            try {
+                const { dashboard } = await this.bot.rewards.getDashboardData()
+                const bannerPoints = pointValue(dashboard.pointClaimBannerPromotion?.pointProgressMax)
+                if (!dashboard.pointClaimBannerPromotion || bannerPoints === 0) claimable = 0
+            } catch {
+                // Keep claimable as null if dashboard fallback is unavailable
+            }
+        }
         return {
             html: response.data,
-            claimable: this.bot.pageParser.claimablePointsFromPayload(response.data),
-            balance: this.bot.pageParser.availablePointsFromPayload(response.data)
+            claimable,
+            balance
         }
     }
 }

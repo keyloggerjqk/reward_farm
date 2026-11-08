@@ -32,6 +32,27 @@ function resolveProjectFile(filename, root = getProjectRoot()) {
     ].find(file => fs.existsSync(file))
 }
 
+function expandCompactProxy(key, value, targetEnv) {
+    const match = /^ACCOUNT_([1-9]\d*)_PROXY$/.exec(key)
+    if (!match || !value) return
+    const idx = match[1]
+    const raw = value.replace(/^https?:\/\//i, '')
+    const parts = raw.split(':')
+    if (parts.length < 2) return
+    const [host, port, username = '', ...rest] = parts
+    const password = rest.join(':')
+    if (!host || !/^\d+$/.test(port)) return
+    const schemeMatch = /^([a-z][a-z0-9+.-]*:\/\/)/i.exec(value)
+    const scheme = schemeMatch ? schemeMatch[1] : 'http://'
+    if (targetEnv[`ACCOUNT_${idx}_PROXY_URL`] === undefined) targetEnv[`ACCOUNT_${idx}_PROXY_URL`] = `${scheme}${host}`
+    if (targetEnv[`ACCOUNT_${idx}_PROXY_PORT`] === undefined) targetEnv[`ACCOUNT_${idx}_PROXY_PORT`] = port
+    if (username && targetEnv[`ACCOUNT_${idx}_PROXY_USERNAME`] === undefined)
+        targetEnv[`ACCOUNT_${idx}_PROXY_USERNAME`] = username
+    if (password && targetEnv[`ACCOUNT_${idx}_PROXY_PASSWORD`] === undefined)
+        targetEnv[`ACCOUNT_${idx}_PROXY_PASSWORD`] = password
+    if (targetEnv[`ACCOUNT_${idx}_PROXY_HTTP`] === undefined) targetEnv[`ACCOUNT_${idx}_PROXY_HTTP`] = 'true'
+}
+
 function loadEnvFile(root) {
     const file = resolveProjectFile('.env', root)
     if (!file) return null
@@ -45,6 +66,7 @@ function loadEnvFile(root) {
         if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'")))
             value = value.slice(1, -1)
         if (process.env[key] === undefined) process.env[key] = value
+        expandCompactProxy(key, value, process.env)
     }
     return file
 }

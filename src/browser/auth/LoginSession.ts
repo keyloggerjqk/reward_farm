@@ -69,10 +69,7 @@ export class LoginSession {
 
         const browserMode = this.bot.config.rewardsMode === 'browser' && !sessionOnly
         if (browserMode) {
-            await page.goto(URLs.rewards.earn, {
-                waitUntil: 'domcontentloaded',
-                timeout: browserTimeout(this.bot, 'navigation')
-            })
+            await this.openRewardsEarn(page)
         } else {
             await page.goto(REWARDS_BASE_URL, { waitUntil: 'domcontentloaded', timeout: 10000 }).catch(() => undefined)
         }
@@ -129,6 +126,34 @@ export class LoginSession {
 
         await configureMediaBlocking(this.bot, context)
         this.bot.logger.debug(this.bot.isMobile, 'LOGIN', 'Login completed, session saved')
+    }
+
+    private async openRewardsEarn(page: Page): Promise<void> {
+        const maxAttempts = 3
+        for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+            this.bot.signal.throwIfAborted()
+            try {
+                await page.goto(URLs.rewards.earn, {
+                    waitUntil: 'domcontentloaded',
+                    timeout: browserTimeout(this.bot, 'navigation')
+                })
+                return
+            } catch (error) {
+                this.bot.signal.throwIfAborted()
+                const message = error instanceof Error ? error.message : String(error)
+                const retryable =
+                    (error as { name?: string })?.name === 'TimeoutError' ||
+                    /net::ERR_(?:CONNECTION_RESET|CONNECTION_CLOSED|TIMED_OUT|NETWORK_CHANGED)/.test(message)
+                if (!retryable || page.isClosed() || attempt === maxAttempts) throw error
+                const retryDelay = 2000 * attempt
+                this.bot.logger.warn(
+                    this.bot.isMobile,
+                    'LOGIN',
+                    `Rewards /earn load timed out | attempt=${attempt}/${maxAttempts} | retryInMs=${retryDelay} | ${message.split(/\r?\n/, 1)[0]}`
+                )
+                await this.bot.utils.wait(retryDelay)
+            }
+        }
     }
 
     async verifyBingSession(page: Page, account: Account): Promise<boolean> {

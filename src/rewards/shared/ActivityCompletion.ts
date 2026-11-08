@@ -71,6 +71,7 @@ export function activityKey(
     result: Pick<ActivityResult, 'offerId'>,
     platform?: string | null
 ): string {
+    if (activity === 'mobile-search-quota' || activity === 'desktop-search-quota') return `main:${activity}`
     if (activity === 'visual-search' || activity === 'edge-browsing')
         return `${platform?.toLowerCase() ?? 'main'}:${activity}`
     return result.offerId ? `offer:${result.offerId}` : `${platform?.toLowerCase() ?? 'main'}:${activity}`

@@ -37,17 +37,30 @@ export class SearchManager {
             desktopQuota.available &&
             (desktopMissing > 0 || this.bot.config.searchSettings.runOnZeroPoints)
 
-        for (const [name, enabled, available] of [
-            ['mobile-search-quota', this.bot.config.workers.doMobileSearch, quotas.mobile.available],
-            ['desktop-search-quota', this.bot.config.workers.doDesktopSearch, desktopQuota.available]
+        const accountLoaded =
+            data?.dashboard.userStatus.isRewardsUser === true || this.bot.accountState.initialBalance !== null
+        for (const [name, enabled, available, counterDefined] of [
+            [
+                'mobile-search-quota',
+                this.bot.config.workers.doMobileSearch,
+                quotas.mobile.available,
+                counters.mobileSearch !== undefined
+            ],
+            [
+                'desktop-search-quota',
+                this.bot.config.workers.doDesktopSearch,
+                desktopQuota.available,
+                counters.pcSearch !== undefined
+            ]
         ] as const) {
             if (enabled)
                 this.bot.recordActivity(
                     name,
-                    activityResult(
-                        available ? 'confirmed' : 'unconfirmed',
-                        available ? 'quota-available' : 'quota-unavailable'
-                    )
+                    available
+                        ? activityResult('confirmed', 'quota-available')
+                        : accountLoaded && !counterDefined
+                          ? activityResult('skipped', 'offer-not-present')
+                          : activityResult('unconfirmed', 'quota-unavailable')
                 )
         }
 
@@ -106,8 +119,8 @@ export class SearchManager {
             try {
                 return await this.bot.activities.search(page, isMobile)
             } catch (error) {
-                this.bot.recordActivity('search', activityFailure(error))
                 this.bot.signal.throwIfAborted()
+                this.bot.recordActivity('search', activityFailure(error))
                 this.bot.logger.error(
                     'main',
                     'SEARCH-MANAGER',
@@ -125,8 +138,8 @@ export class SearchManager {
             try {
                 return await this.bot.activities.searchBonus(this.bot.mainMobilePage)
             } catch (error) {
-                this.bot.recordActivity('bonus-search', activityFailure(error))
                 this.bot.signal.throwIfAborted()
+                this.bot.recordActivity('bonus-search', activityFailure(error))
                 this.bot.logger.error(
                     'main',
                     'SEARCH-MANAGER',

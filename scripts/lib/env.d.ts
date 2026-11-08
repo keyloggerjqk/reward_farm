@@ -4,6 +4,9 @@ export function envBool(key: string, fallback: boolean, sourceEnv?: NodeJS.Proce
 export function accountIndexesFromEnv(sourceEnv?: NodeJS.ProcessEnv): number[]
 export function normalizeLanguageCode(value?: string): string
 export function normalizeGeoLocale(value?: string): string
+export function parseCompactProxy(
+    value?: string
+): { url: string; port: number; username: string; password: string } | null
 export function loadAccountSettings(
     sourceEnv?: NodeJS.ProcessEnv,
     onWarning?: (message: string) => void

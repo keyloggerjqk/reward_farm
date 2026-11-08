@@ -1,11 +1,18 @@
 import { BrowserTaskPage } from '../../../browser/BrowserTaskPage'
+import { browserTimeout } from '../../../browser/BrowserTiming'
+import { ghostClick } from '../../../browser/GhostClick'
 import type { Locator, Page } from 'patchright'
 
+import { URLs } from '../../../constants/urls'
 import type { ParsedOffer } from '../../shared/parsers/RewardsPageParser'
 import { BaseActivity } from '../../shared/activities/BaseActivity'
 import { BrowserRewardNavigator } from '../actions/BrowserRewardNavigator'
 import { browserTaskPass } from '../BrowserTaskPass'
 import { activationOutcome, activationException, type ActivationOutcome } from '../../shared/ActivationOutcome'
+
+const SIDE_PANEL_DIALOG = '[role="dialog"]:visible'
+const SIDE_PANEL_ACTIVATE_LINKS =
+    'a[href*="vsstreak" i], a[href*="vstooltip" i], a[data-react-aria-pressable="true"][href], a[href]'
 
 export class VisualSearchActivation extends BaseActivity {
     private readonly navigator = new BrowserRewardNavigator(this.bot)
@@ -39,14 +46,45 @@ export class VisualSearchActivation extends BaseActivity {
                 return activationOutcome('unconfirmed', 'activation-control-missing', target.offerId)
             }
 
+            const opensSidePanel = await this.isSidePanelTrigger(control)
             this.bot.logger.debug(
                 this.bot.isMobile,
                 'VISUAL-SEARCH-BROWSER',
-                `Clicking rendered activation control | offerId=${target.offerId}`
+                `Clicking rendered activation control | offerId=${target.offerId} | opensSidePanel=${opensSidePanel}`
             )
             try {
-                const clicked = await this.navigator.click(page, control)
-                await clicked.close()
+                if (opensSidePanel) {
+                    await ghostClick(page, control, browserTimeout(this.bot), this.bot.signal, { scroll: 'direct' })
+                    const cta = await this.waitForSidePanelControl(page, target)
+                    if (!cta) {
+                        this.bot.logger.warn(
+                            this.bot.isMobile,
+                            'VISUAL-SEARCH-BROWSER',
+                            `Visual Search streak side panel opened without an activation CTA | offerId=${target.offerId}`
+                        )
+                        return activationOutcome('unconfirmed', 'activation-control-missing', target.offerId)
+                    }
+                    this.bot.logger.debug(
+                        this.bot.isMobile,
+                        'VISUAL-SEARCH-BROWSER',
+                        `Clicking side-panel activation CTA | offerId=${target.offerId}`
+                    )
+                    const actionPost = this.waitForServerAction(page, target.offerId)
+                    const ctaClicked = await this.navigator.click(page, cta, target.offerId)
+                    try {
+                        await actionPost
+                    } finally {
+                        await ctaClicked.close()
+                    }
+                } else {
+                    const actionPost = this.waitForServerAction(page, target.offerId)
+                    const clicked = await this.navigator.click(page, control, target.offerId)
+                    try {
+                        await actionPost
+                    } finally {
+                        await clicked.close()
+                    }
+                }
             } catch (error) {
                 return activationException(error, target.offerId, true)
             }
@@ -56,7 +94,88 @@ export class VisualSearchActivation extends BaseActivity {
         }
     }
 
+    private async isSidePanelTrigger(control: Locator): Promise<boolean> {
+        return control
+            .evaluate(element => {
+                if (element.tagName.toLowerCase() === 'a' && element.getAttribute('href')) return false
+                return (
+                    element.getAttribute('aria-haspopup') === 'dialog' ||
+                    Boolean(element.closest('#streaks')) ||
+                    /how to activate/i.test(element.textContent ?? '')
+                )
+            })
+            .catch(() => false)
+    }
+
+    private async waitForServerAction(page: Page, offerId: string): Promise<void> {
+        const timeout = browserTimeout(this.bot, 'optional')
+        const response = await page
+            .waitForResponse(
+                candidate => {
+                    const request = candidate.request()
+                    if (request.method() !== 'POST') return false
+                    if (!candidate.url().startsWith(URLs.rewards.origin)) return false
+                    if (!request.headers()['next-action']) return false
+                    const body = request.postData() ?? ''
+                    return !offerId || body.toLowerCase().includes(offerId.toLowerCase())
+                },
+                { timeout }
+            )
+            .catch(() => null)
+        if (response) {
+            this.bot.logger.debug(
+                this.bot.isMobile,
+                'VISUAL-SEARCH-BROWSER',
+                `Activation server action completed | offerId=${offerId} | status=${response.status()}`
+            )
+        }
+    }
+
+    private async waitForSidePanelControl(page: Page, target: ParsedOffer): Promise<Locator | null> {
+        const timeout = browserTimeout(this.bot)
+        const dialog = page.locator(SIDE_PANEL_DIALOG).last()
+        await dialog
+            .locator(SIDE_PANEL_ACTIVATE_LINKS)
+            .first()
+            .waitFor({ state: 'visible', timeout })
+            .catch(() => undefined)
+
+        if (!(await dialog.isVisible().catch(() => false))) return null
+
+        const byTarget = await this.navigator.findControl(
+            page,
+            {
+                destination: target.destination,
+                offerId: target.offerId,
+                title: 'Activate streak'
+            },
+            dialog.locator('a[href], [role="link"][href]')
+        )
+        if (byTarget) return byTarget
+
+        const byDestination = await this.navigator.uniqueVisible(
+            dialog.locator('a[href*="vsstreak" i], a[href*="vstooltip" i], a[data-react-aria-pressable="true"][href]'),
+            'visual search side-panel activation link'
+        )
+        if (byDestination) return byDestination
+
+        return this.navigator.uniqueVisible(
+            dialog
+                .locator('a[href], button:not([slot="close"]), [role="button"]:not([slot="close"])')
+                .filter({ hasText: /activate|start|enable|turn on|search now/i }),
+            'visual search side-panel activation button'
+        )
+    }
+
     private async findSemanticActivationControl(page: Page): Promise<Locator | null> {
+        const byStreakIcon = await this.navigator.uniqueVisible(
+            page
+                .locator('#streaks button, #streaks [role="button"], main button, main [role="button"]')
+                .filter({ has: page.locator('img[src*="search_visual" i], img[src*="VisualSearch" i]') }),
+            'visual search streak card'
+        )
+        if (byStreakIcon) return byStreakIcon
+
         const direct = await this.navigator.uniqueVisible(
             page
                 .locator('a, button, [role="button"]')

@@ -75,8 +75,14 @@ export class BrowserSearch extends BaseActivity {
             )
             return stats.totalGained
         } catch (error) {
+            this.bot.signal.throwIfAborted()
             this.bot.recordActivity('search', activityFailure(error))
-            throw error
+            this.bot.logger.error(
+                'main',
+                'SEARCH-MANAGER',
+                `${isMobile ? 'Mobile' : 'Desktop'} search failed | ${error instanceof Error ? error.message : String(error)}`
+            )
+            return null
         }
     }
 
@@ -132,13 +138,11 @@ export class BrowserSearch extends BaseActivity {
                 )
             )
             await this.bot.sessionState.synchronize('SEARCH-COOKIE-SEED')
-            await this.bing.open(page)
-            await this.bot.browser.utils.dismissMessages(page)
             return page
         }
         const replaceCrashedPage = async (): Promise<Page> => {
             const replacement = await createSearchPage()
-            this.bot.logger.info(isMobile, tracker.context, 'Replaced crashed Bing tab; continuing searches')
+            this.bot.logger.info(isMobile, tracker.context, 'Replaced Bing search tab; continuing searches')
             return replacement
         }
 
@@ -240,14 +244,18 @@ export class BrowserSearch extends BaseActivity {
     ): Promise<Page> {
         if (isBrowserPageCrashed(page)) page = await replaceCrashedPage()
         this.searchCount++
+        const resetToHome = this.searchCount >= REFRESH_EVERY_SEARCHES
 
-        if (this.searchCount >= REFRESH_EVERY_SEARCHES) {
-            await this.bing.open(page)
-            await this.bot.browser.utils.dismissMessages(page)
-            this.searchCount = 0
-        }
-
-        page = await this.bing.submit(page, query, 'SEARCH-BING', isMobile, undefined, replaceCrashedPage)
+        page = await this.bing.submit(
+            page,
+            query,
+            'SEARCH-BING',
+            isMobile,
+            undefined,
+            replaceCrashedPage,
+            resetToHome
+        )
+        if (resetToHome) this.searchCount = 0
         await this.bot.utils.wait(2500)
 
         if (!isBrowserPageCrashed(page) && this.bot.config.searchSettings.scrollRandomResults) {

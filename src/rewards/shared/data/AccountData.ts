@@ -11,7 +11,7 @@ import { mergeRequestHeaders } from '../../../network/HttpClient'
 import { localeRequestHeaders } from '../../../network/RequestHeaders'
 import type { BrowserRequestResponse } from '../../../browser/BrowserRequestClient'
 import { ServerActions } from '../http/ServerActions'
-import { mergeAccountInfo } from '../parsers/NormalizeRewards'
+import { mergeAccountInfo, mergeCounters } from '../parsers/NormalizeRewards'
 import { accountReset } from '../AccountReset'
 import { observePunchCard } from '../PunchCardProgress'
 
@@ -117,8 +117,31 @@ export class AccountData implements AccountDataSource {
         this.rejectHtmlResponse(response.data, response.status)
 
         const data = map(response.data)
+        if (
+            data.dashboard.userStatus.counters.pcSearch === undefined &&
+            data.dashboard.userStatus.counters.mobileSearch === undefined
+        ) {
+            const earnHtml = await this.getPageHtml(URLs.rewards.earn, '/earn')
+            if (earnHtml) {
+                const snapshot = this.bot.pageParser.snapshotPage(earnHtml)
+                snapshot.account = mergeAccountInfo(data.account, snapshot.account)
+                this.bot.reactSnapshot = snapshot
+                if (this.bot.isMobile) this.bot.reactSnapshots.mobile = snapshot
+                else this.bot.reactSnapshots.desktop = snapshot
+            }
+        }
         data.account = mergeAccountInfo(data.account, this.bot.reactSnapshot?.account)
         data.dashboard.userStatus.level ??= data.account.level
+        data.dashboard.userStatus.counters = mergeCounters(
+            data.dashboard.userStatus.counters,
+            this.bot.reactSnapshot?.counters
+        )
+        if (
+            data.dashboard.userStatus.counters.pcSearch !== undefined ||
+            data.dashboard.userStatus.counters.mobileSearch !== undefined
+        ) {
+            data.sourceInfo.missingSections = data.sourceInfo.missingSections.filter(section => section !== 'counters')
+        }
         this.bot.userData.currentPoints = data.dashboard.userStatus.availablePoints
         this.bot.accountState.observe(data, this.bot.config)
         this.bot.userData.initialPoints = this.bot.accountState.initialBalance!

@@ -16,6 +16,7 @@ import {
     type RenderedPunchCard,
     type RenderedPunchCardStep
 } from '../parsers/PunchCardPageParser'
+import type { QuestChild } from '../../shared/parsers/RewardsPageParser'
 import { BrowserRewardNavigator } from './BrowserRewardNavigator'
 import { observePunchCard } from '../../shared/PunchCardProgress'
 
@@ -145,8 +146,9 @@ export class BrowserPunchCards extends BaseActivity {
             { timeout: browserTimeout(this.bot, 'navigation'), polling: 250 }
         )
         const state = await readPunchCardPage(page)
+        let questChildren: QuestChild[] = []
         try {
-            this.bot.pageParser.snapshotQuestPage(await page.content(), parent)
+            questChildren = this.bot.pageParser.snapshotQuestPage(await page.content(), parent)
         } catch (error) {
             this.bot.logger.debug(
                 this.bot.isMobile,
@@ -159,7 +161,7 @@ export class BrowserPunchCards extends BaseActivity {
             { ...parent, completedSteps: state.completed, totalSteps: state.total ?? parent.totalSteps },
             state.steps.map(step => ({ complete: step.complete, locked: step.disabled }))
         )
-        return state
+        return { ...state, questChildren }
     }
 
     private stepKey(child: RenderedPunchCardStep): string {
@@ -171,6 +173,30 @@ export class BrowserPunchCards extends BaseActivity {
                 destinationUrl: child.destination
             })
         )
+    }
+
+    private matchQuestChild(step: RenderedPunchCardStep, questChildren: readonly QuestChild[]): QuestChild | undefined {
+        if (step.offerId) {
+            const byId = questChildren.find(child => child.offerId === step.offerId)
+            if (byId) return byId
+        }
+        const normalizedTitle = step.title.trim().toLowerCase()
+        if (normalizedTitle) {
+            const byTitle = questChildren.filter(child => child.title.trim().toLowerCase() === normalizedTitle)
+            if (byTitle.length === 1) return byTitle[0]
+        }
+        if (step.destination) {
+            const byDest = questChildren.filter(child => child.destination && child.destination === step.destination)
+            if (byDest.length === 1) return byDest[0]
+        }
+        return undefined
+    }
+
+    private isSearchQuotaStep(step: RenderedPunchCardStep, questChild?: QuestChild): boolean {
+        const offerId = step.offerId ?? questChild?.offerId ?? ''
+        if (/search/i.test(offerId) && /(day|streak|\dx)/i.test(offerId)) return true
+        const text = `${step.title} ${step.description}`.toLowerCase()
+        return /\bsearch\b/.test(text) && /\b(\d+\s*(days?|times?|searches)|daily|streak)\b/.test(text)
     }
 
     private async solveChildren(page: Page, parent: RenderedPunchCard): Promise<void> {
@@ -187,14 +213,36 @@ export class BrowserPunchCards extends BaseActivity {
                 return
             }
             const child = state.steps.find(step => {
-                const key = this.stepKey(step)
-                return (
-                    !step.complete &&
-                    !step.disabled &&
-                    !isSkippedOffer(step.offerId, step.destination) &&
-                    !seen.has(key) &&
-                    !this.bot.attemptedPunchcardChildren.has(`${parent.offerId}:${key}`)
+                const matched = this.matchQuestChild(step, state.questChildren)
+                const resolvedStep = matched && !step.offerId ? { ...step, offerId: matched.offerId } : step
+                const key = this.stepKey(resolvedStep)
+                if (
+                    step.complete ||
+                    step.disabled ||
+                    isSkippedOffer(resolvedStep.offerId, step.destination) ||
+                    seen.has(key) ||
+                    this.bot.attemptedPunchcardChildren.has(`${parent.offerId}:${key}`)
                 )
+                    return false
+                if (matched && !matched.reportable) {
+                    seen.add(key)
+                    this.bot.logger.debug(
+                        this.bot.isMobile,
+                        'PUNCHCARD-BROWSER',
+                        `Skip ${matched.offerId}: not reportable (locked=${matched.isLocked} disabled=${matched.isDisabled} done=${matched.isCompleted} hash=${Boolean(matched.hash)})`
+                    )
+                    return false
+                }
+                if (this.isSearchQuotaStep(resolvedStep, matched)) {
+                    seen.add(key)
+                    this.bot.logger.debug(
+                        this.bot.isMobile,
+                        'PUNCHCARD-BROWSER',
+                        `Skip ${resolvedStep.offerId ?? step.title}: multi-day search task`
+                    )
+                    return false
+                }
+                return true
             })
             if (!child) {
                 this.bot.logger.info(
@@ -207,7 +255,15 @@ export class BrowserPunchCards extends BaseActivity {
                 return
             }
 
-            const key = this.stepKey(child)
+            const matched = this.matchQuestChild(child, state.questChildren)
+            const resolvedOfferId = child.offerId ?? matched?.offerId ?? null
+            const key =
+                resolvedOfferId ??
+                browserOfferKey({
+                    title: child.title,
+                    description: '',
+                    destinationUrl: child.destination
+                })
             seen.add(key)
             if (this.isClaimChild(child) && !this.bot.config.autoClaimPunchcardRewards) {
                 this.bot.logger.info(
@@ -230,24 +286,29 @@ export class BrowserPunchCards extends BaseActivity {
             }
 
             const before = state.completed
-            const verifier = new OfferVerifier(this.bot, child.offerId ?? key)
+            const verifier = new OfferVerifier(this.bot, resolvedOfferId ?? key)
             if (await verifier.capture()) {
                 this.bot.recordActivity(
                     'punchcard-child',
-                    activityResult('skipped', 'already-complete', child.offerId ?? key)
+                    activityResult('skipped', 'already-complete', resolvedOfferId ?? key)
                 )
                 continue
             }
             const confirmed = () =>
                 (before !== null && state.completed !== null && state.completed > before) ||
-                state.steps.some(step => this.stepKey(step) === key && step.complete)
+                state.steps.some(step => {
+                    const stepMatch = this.matchQuestChild(step, state.questChildren)
+                    const stepId = step.offerId ?? stepMatch?.offerId ?? null
+                    return (stepId ?? this.stepKey(step)) === key && step.complete
+                }) ||
+                state.questChildren.some(item => item.offerId === resolvedOfferId && item.isCompleted)
             const result = await runTaskWithDelay(
                 this.bot,
                 async () => {
                     let report: OfferReport | undefined
                     this.bot.attemptedPunchcardChildren.add(`${parent.offerId}:${key}`)
                     try {
-                        const clicked = await this.navigator.click(page, control, child.offerId ?? undefined)
+                        const clicked = await this.navigator.click(page, control, resolvedOfferId ?? undefined)
                         report = clicked.activityReport ?? undefined
                         await clicked.close()
                     } catch (error) {
@@ -268,7 +329,7 @@ export class BrowserPunchCards extends BaseActivity {
                         activityResult(
                             confirmed() ? 'confirmed' : 'unconfirmed',
                             confirmed() ? 'step-complete' : 'step-incomplete',
-                            child.offerId ?? key
+                            resolvedOfferId ?? key
                         ),
                         report
                     )

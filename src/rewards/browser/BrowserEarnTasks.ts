@@ -5,7 +5,7 @@ import { BrowserRewardNavigator } from './actions/BrowserRewardNavigator'
 import { browserOfferKey, confirmBrowserOffer } from './BrowserTaskPass'
 import { readEarnPage } from './parsers/EarnPageParser'
 import type { Page } from 'patchright'
-import { mergeAccountInfo } from '../shared/parsers/NormalizeRewards'
+import { mergeAccountInfo, mergeCounters } from '../shared/parsers/NormalizeRewards'
 
 export class BrowserEarnTasks extends BaseActivity {
     private readonly loggedResets = new Set<string>()
@@ -102,12 +102,17 @@ export class BrowserEarnTasks extends BaseActivity {
                 'EARN-TASKS',
                 `Read rendered /earn cards | dailySet=${daily.length} | more=${more.length} | explore=${more.filter(item => item.promotionSubtype === 'exploreOnBing').length}`
             )
+            const counters = mergeCounters(snapshot.counters, account.dashboard.userStatus.counters)
             return {
                 ...account,
                 account: snapshot.account,
                 dashboard: {
                     ...account.dashboard,
-                    userStatus: { ...account.dashboard.userStatus, level: snapshot.account.level },
+                    userStatus: {
+                        ...account.dashboard.userStatus,
+                        level: snapshot.account.level,
+                        counters
+                    },
                     dailySetPromotions: { [today]: daily },
                     morePromotions: more,
                     morePromotionsWithoutPromotionalItems: [],

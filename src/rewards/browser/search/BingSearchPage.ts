@@ -14,8 +14,10 @@ export class BingSearchPage extends BaseActivity {
         context = 'SEARCH-BING',
         isMobile = this.bot.isMobile,
         maxAttempts = MAX_QUERY_ATTEMPTS,
-        replaceCrashedPage?: () => Promise<Page>
+        replaceCrashedPage?: () => Promise<Page>,
+        resetToHome = false
     ): Promise<Page> {
+        let shouldResetHome = resetToHome
         for (let attempt = 1; attempt <= maxAttempts; attempt++) {
             this.bot.signal.throwIfAborted()
             try {
@@ -23,7 +25,8 @@ export class BingSearchPage extends BaseActivity {
                     if (!replaceCrashedPage) throw new Error('Bing search page crashed')
                     page = await replaceCrashedPage()
                 }
-                await this.prepare(page)
+                await this.prepare(page, shouldResetHome)
+                shouldResetHome = false
                 await this.bot.utils.wait(humanPreFocusPauseMs())
                 const searchBox = await humanType(page, query, browserTimeout(this.bot), this.bot.signal)
                 await submitSearch(page, query, searchBox, browserTimeout(this.bot, 'navigation'), this.bot.signal)
@@ -31,9 +34,18 @@ export class BingSearchPage extends BaseActivity {
             } catch (error) {
                 this.bot.signal.throwIfAborted()
                 const crashed = isBrowserPageCrashed(page) || isBrowserPageCrashError(error)
+                const hungTab =
+                    !crashed &&
+                    Boolean(replaceCrashedPage) &&
+                    attempt >= 2 &&
+                    (error as { name?: string })?.name === 'TimeoutError'
                 const retry = attempt < maxAttempts && !page.isClosed() && (!crashed || Boolean(replaceCrashedPage))
                 const message = (error instanceof Error ? error.message : String(error)).split(/\r?\n/)[0]
-                const recovery = crashed ? 'replacing crashed Bing tab' : 'reloading Bing'
+                const recovery = crashed
+                    ? 'replacing crashed Bing tab'
+                    : hungTab
+                      ? 'replacing unresponsive Bing tab'
+                      : 'reloading Bing'
                 this.bot.logger.warn(
                     isMobile,
                     context,
@@ -50,7 +62,7 @@ export class BingSearchPage extends BaseActivity {
                     throw failure
                 }
 
-                if (crashed && replaceCrashedPage) page = await replaceCrashedPage()
+                if ((crashed || hungTab) && replaceCrashedPage) page = await replaceCrashedPage()
                 else
                     await this.recover(page).catch(recoveryError => {
                         this.bot.signal.throwIfAborted()
@@ -67,10 +79,10 @@ export class BingSearchPage extends BaseActivity {
         throw new Error('No Bing search attempt was available')
     }
 
-    private async prepare(page: Page): Promise<void> {
+    private async prepare(page: Page, resetToHome = false): Promise<void> {
         await page.bringToFront()
         const current = new URL(page.url())
-        if (current.origin !== URLs.bing.origin || !['/', '/search'].includes(current.pathname)) {
+        if (resetToHome || current.origin !== URLs.bing.origin || !['/', '/search'].includes(current.pathname)) {
             await this.open(page)
         }
         await this.bot.browser.utils.dismissMessages(page)

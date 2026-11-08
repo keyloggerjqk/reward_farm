@@ -44,14 +44,14 @@ export class AccountState {
 
     record(activity: string, result: ActivityResult, isMobile: boolean): boolean {
         const platform = isMobile ? 'mobile' : 'desktop'
+        const key = activityKey(activity, result, platform)
         if (activity.endsWith('-data') || activity.endsWith('-quota')) {
             const previous = [...this.results]
                 .reverse()
-                .find(item => item.activity === activity && item.platform === platform)
+                .find(item => activityKey(item.activity, item, item.platform) === key)
             if (previous?.status === result.status && previous.reason === result.reason) return false
         }
         this.results.push({ activity, platform, ...result })
-        const key = activityKey(activity, result, platform)
         if (result.status === 'failed' || result.status === 'unconfirmed')
             this.issues.set(
                 key,

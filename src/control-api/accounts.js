@@ -1,5 +1,11 @@
 import { requestError } from './http.js'
-import { accountIndexesFromEnv, envStrFrom, normalizeGeoLocale, normalizeLanguageCode } from '../../scripts/lib/env.js'
+import {
+    accountIndexesFromEnv,
+    envStrFrom,
+    normalizeGeoLocale,
+    normalizeLanguageCode,
+    parseCompactProxy
+} from '../../scripts/lib/env.js'
 import { normalizeAccountLevel } from '../rewards/shared/parsers/NormalizeRewards.js'
 
 function sanitizeProxyUrl(value) {
@@ -20,7 +26,11 @@ export function loadAccounts(sourceEnv = process.env) {
         const email = envStrFrom(sourceEnv, `ACCOUNT_${i}_EMAIL`)
         if (!email) continue
 
-        const proxyUrl = envStrFrom(sourceEnv, `ACCOUNT_${i}_PROXY_URL`)
+        const compact = parseCompactProxy(envStrFrom(sourceEnv, `ACCOUNT_${i}_PROXY`))
+        const proxyUrl = envStrFrom(sourceEnv, `ACCOUNT_${i}_PROXY_URL`) ?? compact?.url
+        const proxyPort = envStrFrom(sourceEnv, `ACCOUNT_${i}_PROXY_PORT`) ?? (compact ? String(compact.port) : null)
+        const proxyUser = envStrFrom(sourceEnv, `ACCOUNT_${i}_PROXY_USERNAME`) ?? compact?.username
+        const proxyPass = envStrFrom(sourceEnv, `ACCOUNT_${i}_PROXY_PASSWORD`) ?? compact?.password
         accounts.push({
             index: i,
             email,
@@ -32,11 +42,8 @@ export function loadAccounts(sourceEnv = process.env) {
             proxy: proxyUrl
                 ? {
                       url: sanitizeProxyUrl(proxyUrl),
-                      port: envStrFrom(sourceEnv, `ACCOUNT_${i}_PROXY_PORT`) ?? null,
-                      hasCredentials: Boolean(
-                          envStrFrom(sourceEnv, `ACCOUNT_${i}_PROXY_USERNAME`) &&
-                          envStrFrom(sourceEnv, `ACCOUNT_${i}_PROXY_PASSWORD`)
-                      )
+                      port: proxyPort,
+                      hasCredentials: Boolean(proxyUser && proxyPass)
                   }
                 : null
         })

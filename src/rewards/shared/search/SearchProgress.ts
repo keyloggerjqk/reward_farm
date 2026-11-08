@@ -84,9 +84,9 @@ export class SearchProgress {
         const identities: string[] = []
         for (const counter of counters) {
             const max = pointValue(counter.pointProgressMax)
-            const earned = promotionProgress(counter)
-            if (max === null || earned === null || earned > max)
-                return { available: false, earned: 0, max: 0, remaining: 0 }
+            const rawEarned = promotionProgress(counter)
+            if (max === null || rawEarned === null) return { available: false, earned: 0, max: 0, remaining: 0 }
+            const earned = Math.min(rawEarned, max)
             quota.earned += earned
             quota.max += max
             quota.remaining += max - earned

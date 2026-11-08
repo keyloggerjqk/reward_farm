@@ -1,7 +1,7 @@
 import type { Page } from 'patchright'
 import { readRewardCards } from './RewardCardParser'
 
-export const EARN_TASK_SECTIONS = '#dailyset, #exploreonbing, #quests, #moreactivities'
+export const EARN_TASK_SECTIONS = '#dailyset, #streaks, #exploreonbing, #quests, #moreactivities'
 export const DAILY_SET_LINKS = '#dailyset a[href], #dailyset [role="link"][href]'
 export const MORE_ACTIVITIES_LINKS =
     '#exploreonbing a[href], #exploreonbing [role="link"][href], #moreactivities a[href], #moreactivities [role="link"][href]'

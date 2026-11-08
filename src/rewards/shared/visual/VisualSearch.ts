@@ -456,7 +456,11 @@ export class VisualSearch extends BaseActivity {
             const snapshot = await this.bot.rewards.refreshEarnSnapshot()
             if (!snapshot) return undefined
             this.bot.reactSnapshot = snapshot
-            this.availabilityKnown = snapshot.account.availablePoints !== null
+            this.availabilityKnown =
+                snapshot.account.availablePoints !== null ||
+                snapshot.account.level !== null ||
+                snapshot.offers.length > 0 ||
+                snapshot.streaks.length > 0
             return this.findStreak(snapshot.streaks)
         } catch (error) {
             this.bot.signal.throwIfAborted()

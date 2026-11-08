@@ -56,6 +56,26 @@ export function normalizeGeoLocale(value = 'auto') {
 
 const deprecationWarned = new Set()
 
+export function parseCompactProxy(value) {
+    if (!value) return null
+    const trimmed = String(value).trim()
+    if (!trimmed) return null
+    const schemeMatch = /^([a-z][a-z0-9+.-]*:\/\/)/i.exec(trimmed)
+    const scheme = schemeMatch ? schemeMatch[1] : 'http://'
+    const raw = schemeMatch ? trimmed.slice(scheme.length) : trimmed
+    const parts = raw.split(':')
+    if (parts.length < 2) return null
+    const [host, portStr, username = '', ...rest] = parts
+    const port = Number(portStr)
+    if (!host || !Number.isSafeInteger(port) || port < 1 || port > 65535) return null
+    return {
+        url: `${scheme}${host}`,
+        port,
+        username,
+        password: rest.join(':')
+    }
+}
+
 export function loadAccountSettings(
     sourceEnv = process.env,
     onWarning = message => logging.logMessage('ACCOUNTS', 'warn', message)
@@ -69,23 +89,26 @@ export function loadAccountSettings(
         }
         return envBool(legacy, fallback, sourceEnv)
     }
-    return accountSlotsFromEnv(sourceEnv).map(index => ({
-        email: envStr(`ACCOUNT_${index}_EMAIL`, sourceEnv),
-        password: envStr(`ACCOUNT_${index}_PASSWORD`, sourceEnv) ?? '',
-        totpSecret: envStr(`ACCOUNT_${index}_TOTP_SECRET`, sourceEnv),
-        recoveryEmail: envStr(`ACCOUNT_${index}_RECOVERY_EMAIL`, sourceEnv) ?? '',
-        geoLocale: normalizeGeoLocale(envStr(`ACCOUNT_${index}_GEO_LOCALE`, sourceEnv) ?? 'auto'),
-        langCode: normalizeLanguageCode(envStr(`ACCOUNT_${index}_LANG_CODE`, sourceEnv) ?? 'en'),
-        proxy: {
-            proxyHttp: legacyBool(`ACCOUNT_${index}_PROXY_HTTP`, `ACCOUNT_${index}_PROXY_AXIOS`, false),
-            url: envStr(`ACCOUNT_${index}_PROXY_URL`, sourceEnv) ?? '',
-            port: envInt(`ACCOUNT_${index}_PROXY_PORT`, 0, sourceEnv),
-            username: envStr(`ACCOUNT_${index}_PROXY_USERNAME`, sourceEnv) ?? '',
-            password: envStr(`ACCOUNT_${index}_PROXY_PASSWORD`, sourceEnv) ?? ''
-        },
-        saveFingerprint: {
-            mobile: envBool(`ACCOUNT_${index}_SAVE_FINGERPRINT_MOBILE`, true, sourceEnv),
-            desktop: envBool(`ACCOUNT_${index}_SAVE_FINGERPRINT_DESKTOP`, true, sourceEnv)
+    return accountSlotsFromEnv(sourceEnv).map(index => {
+        const compact = parseCompactProxy(envStr(`ACCOUNT_${index}_PROXY`, sourceEnv))
+        return {
+            email: envStr(`ACCOUNT_${index}_EMAIL`, sourceEnv),
+            password: envStr(`ACCOUNT_${index}_PASSWORD`, sourceEnv) ?? '',
+            totpSecret: envStr(`ACCOUNT_${index}_TOTP_SECRET`, sourceEnv),
+            recoveryEmail: envStr(`ACCOUNT_${index}_RECOVERY_EMAIL`, sourceEnv) ?? '',
+            geoLocale: normalizeGeoLocale(envStr(`ACCOUNT_${index}_GEO_LOCALE`, sourceEnv) ?? 'auto'),
+            langCode: normalizeLanguageCode(envStr(`ACCOUNT_${index}_LANG_CODE`, sourceEnv) ?? 'en'),
+            proxy: {
+                proxyHttp: legacyBool(`ACCOUNT_${index}_PROXY_HTTP`, `ACCOUNT_${index}_PROXY_AXIOS`, Boolean(compact)),
+                url: envStr(`ACCOUNT_${index}_PROXY_URL`, sourceEnv) ?? compact?.url ?? '',
+                port: envInt(`ACCOUNT_${index}_PROXY_PORT`, compact?.port ?? 0, sourceEnv),
+                username: envStr(`ACCOUNT_${index}_PROXY_USERNAME`, sourceEnv) ?? compact?.username ?? '',
+                password: envStr(`ACCOUNT_${index}_PROXY_PASSWORD`, sourceEnv) ?? compact?.password ?? ''
+            },
+            saveFingerprint: {
+                mobile: envBool(`ACCOUNT_${index}_SAVE_FINGERPRINT_MOBILE`, true, sourceEnv),
+                desktop: envBool(`ACCOUNT_${index}_SAVE_FINGERPRINT_DESKTOP`, true, sourceEnv)
+            }
         }
-    }))
+    })
 }
