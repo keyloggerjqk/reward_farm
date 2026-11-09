@@ -26,7 +26,7 @@ const ENV_KEY_RE = /^[A-Za-z_][A-Za-z0-9_]*$/
 const RESERVED_ENV_KEYS = new Set(['__PROTO__', 'PROTOTYPE', 'CONSTRUCTOR'])
 const CONFIG_ENV_KEYS = new Set(ENV_OVERRIDES.map(entry => entry.env))
 const ACCOUNT_ENV_RE =
-    /^ACCOUNT_[1-9][0-9]*_(?:EMAIL|PASSWORD|TOTP_SECRET|RECOVERY_EMAIL|GEO_LOCALE|LANG_CODE|PROXY_(?:URL|PORT|USERNAME|PASSWORD|HTTP|AXIOS)|SAVE_FINGERPRINT_(?:MOBILE|DESKTOP))$/
+    /^ACCOUNT_[1-9][0-9]*_(?:EMAIL|PASSWORD|TOTP_SECRET|RECOVERY_EMAIL|GEO_LOCALE|LANG_CODE|PROXY|PROXY_(?:URL|PORT|USERNAME|PASSWORD|HTTP|AXIOS)|SAVE_FINGERPRINT_(?:MOBILE|DESKTOP))$/
 
 export class ProcessManager extends EventEmitter {
     /** @param {{ command: string, cwd: string, args?: string[], sessionCommand?: { command: string, args: string[] } | null, stopTimeoutMs?: number, logBufferSize?: number, historySize?: number, name?: string, version?: string }} options */
